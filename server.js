@@ -7,7 +7,7 @@ const { TikTokLiveConnection } = require('tiktok-live-connector');
 const PORT = process.env.PORT || 3005;
 const LAST_ROOM_FILE = path.join(__dirname, 'last_room.json');
 
-let defaultUser = process.env.TIKTOK_USERNAME || 'leepungg';
+let defaultUser = process.env.TIKTOK_USERNAME || 'foxy.2491';
 if (fs.existsSync(LAST_ROOM_FILE)) {
     try {
         const saved = JSON.parse(fs.readFileSync(LAST_ROOM_FILE, 'utf8'));
@@ -126,7 +126,7 @@ function connectRoom(username) {
         }
 
         // Do not broadcast empty messages
-        if (!comment || !comment.trim()) {
+        if (!comment || !String(comment).trim()) {
             return;
         }
 
