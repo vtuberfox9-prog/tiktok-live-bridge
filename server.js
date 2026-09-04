@@ -132,27 +132,33 @@ function connectRoom(username) {
     });
 
     conn.on('streamEnd', () => {
-        console.log(`[Bridge] Stream ended by @${username}`);
+        console.log(`[Bridge] Stream explicitly ended by @${username}`);
         currentLiveInfo.isLive = false;
         currentLiveInfo.streamUrl = null;
         broadcast('stream_end', { username, isLive: false });
     });
 
     conn.on('disconnected', () => {
-        console.log(`[Bridge] Disconnected from @${username}`);
-        currentLiveInfo.isLive = false;
-        broadcast('stream_end', { username, isLive: false });
+        console.log(`[Bridge] Socket disconnected from @${username}. Seamlessly auto-reconnecting in 2s...`);
+        // Do NOT broadcast stream_end on transient network drops!
+        setTimeout(() => {
+            if (currentUsername === username) {
+                try {
+                    connectRoom(username);
+                } catch (e) {}
+            }
+        }, 2000);
     });
 }
 
-// Auto reconnect check every 45 seconds if streamer comes online
+// Auto reconnect check every 30 seconds if streamer comes online
 setInterval(() => {
     if (!currentLiveInfo.isLive && currentUsername) {
         try {
             connectRoom(currentUsername);
         } catch (e) {}
     }
-}, 45000);
+}, 30000);
 
 // SSE Heartbeat Keepalive ping every 25s (prevents cloud proxies from disconnecting idle clients)
 setInterval(() => {
