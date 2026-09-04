@@ -52,7 +52,7 @@ function connectRoom(username) {
     };
     console.log(`\n[Bridge] Connecting TikTok Live to: @${username}...`);
 
-    const conn = new TikTokLiveConnection(username);
+    const conn = new TikTokLiveConnection(username, {});
     currentConn = conn;
 
     conn.connect().then(state => {
@@ -145,13 +145,12 @@ function connectRoom(username) {
     });
 }
 
-// Initial connection
-connectRoom(currentUsername);
-
 // Auto reconnect check every 45 seconds if streamer comes online
 setInterval(() => {
     if (!currentLiveInfo.isLive && currentUsername) {
-        connectRoom(currentUsername);
+        try {
+            connectRoom(currentUsername);
+        } catch (e) {}
     }
 }, 45000);
 
@@ -233,6 +232,11 @@ const server = http.createServer((req, res) => {
     res.end('Not Found');
 });
 
-server.listen(PORT, () => {
+server.listen(PORT, '0.0.0.0', () => {
     console.log(`[Bridge] Server listening on port ${PORT}`);
+    try {
+        connectRoom(currentUsername);
+    } catch (e) {
+        console.error('[Bridge] Error in initial connectRoom:', e.message);
+    }
 });
