@@ -109,15 +109,34 @@ function connectRoom(username) {
 
     conn.on('chat', data => {
         const nickname = data.nickname || data.user?.nickname || data.user?.uniqueId || data.uniqueId || 'ผู้ชม';
-        const comment = data.comment || '';
-        const avatar = data.user?.profilePictureUrl || (data.user?.profilePicture?.url ? data.user.profilePicture.url[0] : null) || `https://ui-avatars.com/api/?name=${encodeURIComponent(nickname.slice(0, 3))}&background=F97316&color=fff&bold=true`;
         
+        let comment = data.comment || data.content || data.text || '';
+        if (!comment && data.emotes && Array.isArray(data.emotes) && data.emotes.length > 0) {
+            comment = data.emotes.map(e => e.emoteImageUrl ? `<img src="${e.emoteImageUrl}" alt="sticker" class="chat-inline-emote" referrerpolicy="no-referrer" style="height:26px;vertical-align:middle;display:inline-block;" />` : '💖').join(' ');
+        }
+        if (!comment && (data.defaultPattern || data.describe)) {
+            comment = data.defaultPattern || data.describe;
+        }
+        if (!comment || !comment.trim()) {
+            comment = 'ส่งกำลังใจเคาะจอ ❤️✨';
+        }
+
+        const avatar = data.profilePictureUrl
+            || data.user?.profilePictureUrl
+            || (data.userDetails?.profilePictureUrls ? data.userDetails.profilePictureUrls[0] : null)
+            || (data.profilePicture?.url ? data.profilePicture.url[0] : null)
+            || (data.user?.profilePicture?.url ? data.user.profilePicture.url[0] : null)
+            || `https://ui-avatars.com/api/?name=${encodeURIComponent(nickname.slice(0, 3))}&background=FF2E51&color=fff&bold=true`;
+        
+        const badge = (data.userBadges && data.userBadges.some(b => (b.type && b.type.includes('moderator')) || b.isModerator)) ? 'VIP'
+            : (data.followRole || data.user?.followInfo?.followStatus ? 'FAN' : 'SUB');
+
         const msg = {
             id: 'tt_' + Date.now() + '_' + Math.random().toString(36).substr(2, 4),
             user: nickname,
             text: comment,
             avatar,
-            badge: data.user?.followInfo?.followStatus ? 'FAN' : 'SUB',
+            badge,
             timestamp: Date.now()
         };
 
@@ -129,18 +148,49 @@ function connectRoom(username) {
     });
 
     conn.on('gift', data => {
-        const nickname = data.user?.nickname || data.nickname || 'แฟนคลับ';
-        const giftName = data.giftName || 'ของขวัญ';
+        const nickname = data.nickname || data.user?.nickname || data.user?.uniqueId || data.uniqueId || 'แฟนคลับ';
+        const giftName = data.giftName || data.giftDetails?.giftName || 'ของขวัญ';
         const count = data.repeatCount || 1;
+        const avatar = data.profilePictureUrl
+            || data.user?.profilePictureUrl
+            || (data.userDetails?.profilePictureUrls ? data.userDetails.profilePictureUrls[0] : null)
+            || (data.profilePicture?.url ? data.profilePicture.url[0] : null)
+            || `https://ui-avatars.com/api/?name=${encodeURIComponent(nickname.slice(0, 3))}&background=FF2E51&color=fff&bold=true`;
         const msg = {
             id: 'gift_' + Date.now(),
             user: nickname,
             text: `ส่งของขวัญ: ${giftName} x ${count} 🎁✨`,
+            avatar,
+            badge: 'VIP',
             isGift: true,
             timestamp: Date.now()
         };
         console.log(`[GIFT] ${nickname}: ${giftName} x ${count}`);
+        recentMessages.push(msg);
+        if (recentMessages.length > MAX_RECENT) recentMessages.shift();
         broadcast('gift', msg);
+    });
+
+    conn.on('like', data => {
+        const nickname = data.nickname || data.user?.nickname || data.user?.uniqueId || data.uniqueId || 'ผู้ชม';
+        const count = data.likeCount || 1;
+        const avatar = data.profilePictureUrl
+            || data.user?.profilePictureUrl
+            || (data.userDetails?.profilePictureUrls ? data.userDetails.profilePictureUrls[0] : null)
+            || (data.profilePicture?.url ? data.profilePicture.url[0] : null)
+            || `https://ui-avatars.com/api/?name=${encodeURIComponent(nickname.slice(0, 3))}&background=FF2E51&color=fff&bold=true`;
+        const msg = {
+            id: 'like_' + Date.now(),
+            user: nickname,
+            text: `เคาะจอส่งหัวใจรัวๆ x${count} ❤️✨`,
+            avatar,
+            badge: 'FAN',
+            isGift: false,
+            timestamp: Date.now()
+        };
+        recentMessages.push(msg);
+        if (recentMessages.length > MAX_RECENT) recentMessages.shift();
+        broadcast('chat', msg);
     });
 
     conn.on('roomUser', data => {
