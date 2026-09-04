@@ -1,0 +1,15 @@
+{
+  "name": "tiktok-live-bridge",
+  "version": "1.0.0",
+  "description": "Real-time TikTok Live Chat and Stream Bridge",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "tiktok-live-connector": "^2.1.1-beta1"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

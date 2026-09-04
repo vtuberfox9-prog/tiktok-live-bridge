@@ -1,0 +1,238 @@
+const http = require('http');
+const { TikTokLiveConnection } = require('tiktok-live-connector');
+
+const PORT = process.env.PORT || 3005;
+let currentUsername = process.env.TIKTOK_USERNAME || 'foxy.2491';
+let currentConn = null;
+const clients = new Set();
+const recentMessages = [];
+const MAX_RECENT = 50;
+
+let currentLiveInfo = {
+    isLive: false,
+    username: currentUsername,
+    roomId: null,
+    title: '',
+    streamUrl: null,
+    hlsUrl: null,
+    flvUrl: null,
+    viewers: 0
+};
+
+function broadcast(event, data) {
+    const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+    for (const res of clients) {
+        try {
+            res.write(payload);
+        } catch (e) {
+            clients.delete(res);
+        }
+    }
+}
+
+function connectRoom(username) {
+    if (currentConn) {
+        try {
+            currentConn.removeAllListeners();
+            currentConn.disconnect();
+        } catch (e) {}
+        currentConn = null;
+    }
+
+    currentUsername = username;
+    currentLiveInfo = {
+        isLive: false,
+        username,
+        roomId: null,
+        title: '',
+        streamUrl: null,
+        hlsUrl: null,
+        flvUrl: null,
+        viewers: 0
+    };
+    console.log(`\n[Bridge] Connecting TikTok Live to: @${username}...`);
+
+    const conn = new TikTokLiveConnection(username);
+    currentConn = conn;
+
+    conn.connect().then(state => {
+        const d = state.roomInfo?.data || state.roomInfo || {};
+        const streamData = d.stream_url || {};
+        const hlsUrl = streamData.hls_pull_url || null;
+        const flvUrl = streamData.flv_pull_url?.HD1 || streamData.rtmp_pull_url || null;
+        const streamUrl = hlsUrl || flvUrl;
+
+        const title = d.title || 'TikTok Live Stream';
+        const viewers = d.user_count || d.stats?.total_user || 0;
+
+        currentLiveInfo = {
+            isLive: true,
+            username,
+            roomId: state.roomId,
+            title,
+            streamUrl,
+            hlsUrl,
+            flvUrl,
+            viewers
+        };
+
+        console.log(`[Bridge] Connected to @${username}! Room ID: ${state.roomId}`);
+        console.log(`[Bridge] Title: "${title}" | Viewers: ${viewers}`);
+        if (hlsUrl) console.log(`[Bridge] HLS URL: ${hlsUrl.slice(0, 60)}...`);
+
+        broadcast('connected', currentLiveInfo);
+        broadcast('live_status', currentLiveInfo);
+    }).catch(err => {
+        console.log(`[Bridge] Connection offline (@${username}):`, err.message);
+        currentLiveInfo.isLive = false;
+        broadcast('live_status', currentLiveInfo);
+    });
+
+    conn.on('chat', data => {
+        const nickname = data.nickname || data.user?.nickname || data.user?.uniqueId || data.uniqueId || 'ผู้ชม';
+        const comment = data.comment || '';
+        const avatar = data.user?.profilePictureUrl || (data.user?.profilePicture?.url ? data.user.profilePicture.url[0] : null) || `https://ui-avatars.com/api/?name=${encodeURIComponent(nickname.slice(0, 3))}&background=F97316&color=fff&bold=true`;
+        
+        const msg = {
+            id: 'tt_' + Date.now() + '_' + Math.random().toString(36).substr(2, 4),
+            user: nickname,
+            text: comment,
+            avatar,
+            badge: data.user?.followInfo?.followStatus ? 'FAN' : 'SUB',
+            timestamp: Date.now()
+        };
+
+        console.log(`[CHAT] ${nickname}: ${comment}`);
+        recentMessages.push(msg);
+        if (recentMessages.length > MAX_RECENT) recentMessages.shift();
+
+        broadcast('chat', msg);
+    });
+
+    conn.on('gift', data => {
+        const nickname = data.user?.nickname || data.nickname || 'แฟนคลับ';
+        const giftName = data.giftName || 'ของขวัญ';
+        const count = data.repeatCount || 1;
+        const msg = {
+            id: 'gift_' + Date.now(),
+            user: nickname,
+            text: `ส่งของขวัญ: ${giftName} x ${count} 🎁✨`,
+            isGift: true,
+            timestamp: Date.now()
+        };
+        console.log(`[GIFT] ${nickname}: ${giftName} x ${count}`);
+        broadcast('gift', msg);
+    });
+
+    conn.on('roomUser', data => {
+        if (data.viewerCount) {
+            currentLiveInfo.viewers = data.viewerCount;
+            broadcast('viewer_count', { viewers: data.viewerCount });
+        }
+    });
+
+    conn.on('streamEnd', () => {
+        console.log(`[Bridge] Stream ended by @${username}`);
+        currentLiveInfo.isLive = false;
+        currentLiveInfo.streamUrl = null;
+        broadcast('stream_end', { username, isLive: false });
+    });
+
+    conn.on('disconnected', () => {
+        console.log(`[Bridge] Disconnected from @${username}`);
+        currentLiveInfo.isLive = false;
+        broadcast('stream_end', { username, isLive: false });
+    });
+}
+
+// Initial connection
+connectRoom(currentUsername);
+
+// Auto reconnect check every 45 seconds if streamer comes online
+setInterval(() => {
+    if (!currentLiveInfo.isLive && currentUsername) {
+        connectRoom(currentUsername);
+    }
+}, 45000);
+
+// SSE Heartbeat Keepalive ping every 25s (prevents cloud proxies from disconnecting idle clients)
+setInterval(() => {
+    broadcast('ping', { time: Date.now() });
+}, 25000);
+
+// HTTP Server
+const server = http.createServer((req, res) => {
+    // CORS Headers
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+    if (req.method === 'OPTIONS') {
+        res.writeHead(204);
+        res.end();
+        return;
+    }
+
+    const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+
+    if (url.pathname === '/' || url.pathname === '/health') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+            status: 'online',
+            service: 'TikTok Live Chat & Stream Bridge',
+            currentStreamer: currentUsername,
+            liveInfo: currentLiveInfo,
+            activeClients: clients.size
+        }, null, 2));
+        return;
+    }
+
+    if (url.pathname === '/api/live-status') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(currentLiveInfo));
+        return;
+    }
+
+    if (url.pathname === '/api/live-chat/sse') {
+        res.writeHead(200, {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive'
+        });
+
+        clients.add(res);
+        console.log(`[Bridge] SSE Client connected (${clients.size} total)`);
+
+        // Handshake
+        res.write(`event: init\ndata: ${JSON.stringify({ username: currentUsername, liveInfo: currentLiveInfo, recent: recentMessages })}\n\n`);
+
+        req.on('close', () => {
+            clients.delete(res);
+            console.log(`[Bridge] SSE Client disconnected (${clients.size} remaining)`);
+        });
+        return;
+    }
+
+    if (url.pathname === '/api/switch-room') {
+        const user = url.searchParams.get('username');
+        if (user) {
+            connectRoom(user);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true, username: user }));
+            return;
+        }
+    }
+
+    if (url.pathname === '/api/live-chat/recent') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ username: currentUsername, messages: recentMessages }));
+        return;
+    }
+
+    res.writeHead(404);
+    res.end('Not Found');
+});
+
+server.listen(PORT, () => {
+    console.log(`[Bridge] Server listening on port ${PORT}`);
+});
