@@ -7,7 +7,7 @@ const { TikTokLiveConnection } = require('tiktok-live-connector');
 const PORT = process.env.PORT || 3005;
 const LAST_ROOM_FILE = path.join(__dirname, 'last_room.json');
 
-let defaultUser = process.env.TIKTOK_USERNAME || 'mosatang';
+let defaultUser = process.env.TIKTOK_USERNAME || 'leepungg';
 if (fs.existsSync(LAST_ROOM_FILE)) {
     try {
         const saved = JSON.parse(fs.readFileSync(LAST_ROOM_FILE, 'utf8'));
@@ -56,6 +56,7 @@ function connectRoom(username) {
     }
 
     currentUsername = username;
+    recentMessages.length = 0; // Clear old room messages
     try {
         fs.writeFileSync(LAST_ROOM_FILE, JSON.stringify({ username, savedAt: new Date().toISOString() }));
     } catch (e) {}
@@ -77,7 +78,13 @@ function connectRoom(username) {
     conn.connect().then(state => {
         const d = state.roomInfo?.data || state.roomInfo || {};
         const streamData = d.stream_url || {};
-        const hlsUrl = streamData.hls_pull_url || null;
+        let hlsUrl = streamData.hls_pull_url || null;
+        if (!hlsUrl && streamData.live_core_sdk_data?.pull_data?.stream_data) {
+            try {
+                const parsed = JSON.parse(streamData.live_core_sdk_data.pull_data.stream_data);
+                hlsUrl = parsed.data?.hd?.main?.hls || parsed.data?.sd?.main?.hls || parsed.data?.ld?.main?.hls || null;
+            } catch (e) {}
+        }
         const flvUrl = streamData.flv_pull_url?.HD1 || streamData.rtmp_pull_url || null;
         const streamUrl = hlsUrl || flvUrl;
 
@@ -112,13 +119,15 @@ function connectRoom(username) {
         
         let comment = data.comment || data.content || data.text || '';
         if (!comment && data.emotes && Array.isArray(data.emotes) && data.emotes.length > 0) {
-            comment = data.emotes.map(e => e.emoteImageUrl ? `<img src="${e.emoteImageUrl}" alt="sticker" class="chat-inline-emote" referrerpolicy="no-referrer" style="height:26px;vertical-align:middle;display:inline-block;" />` : '💖').join(' ');
+            comment = data.emotes.map(e => e.emoteImageUrl ? `<img src="${e.emoteImageUrl}" alt="sticker" class="chat-inline-emote" referrerpolicy="no-referrer" style="height:26px;vertical-align:middle;display:inline-block;" />` : '').join(' ');
         }
         if (!comment && (data.defaultPattern || data.describe)) {
             comment = data.defaultPattern || data.describe;
         }
+
+        // Do not broadcast empty messages
         if (!comment || !comment.trim()) {
-            comment = 'ส่งกำลังใจเคาะจอ ❤️✨';
+            return;
         }
 
         const avatar = data.profilePictureUrl
@@ -169,28 +178,6 @@ function connectRoom(username) {
         recentMessages.push(msg);
         if (recentMessages.length > MAX_RECENT) recentMessages.shift();
         broadcast('gift', msg);
-    });
-
-    conn.on('like', data => {
-        const nickname = data.nickname || data.user?.nickname || data.user?.uniqueId || data.uniqueId || 'ผู้ชม';
-        const count = data.likeCount || 1;
-        const avatar = data.profilePictureUrl
-            || data.user?.profilePictureUrl
-            || (data.userDetails?.profilePictureUrls ? data.userDetails.profilePictureUrls[0] : null)
-            || (data.profilePicture?.url ? data.profilePicture.url[0] : null)
-            || `https://ui-avatars.com/api/?name=${encodeURIComponent(nickname.slice(0, 3))}&background=FF2E51&color=fff&bold=true`;
-        const msg = {
-            id: 'like_' + Date.now(),
-            user: nickname,
-            text: `เคาะจอส่งหัวใจรัวๆ x${count} ❤️✨`,
-            avatar,
-            badge: 'FAN',
-            isGift: false,
-            timestamp: Date.now()
-        };
-        recentMessages.push(msg);
-        if (recentMessages.length > MAX_RECENT) recentMessages.shift();
-        broadcast('chat', msg);
     });
 
     conn.on('roomUser', data => {
