@@ -1,8 +1,24 @@
 const http = require('http');
+const https = require('https');
+const fs = require('fs');
+const path = require('path');
 const { TikTokLiveConnection } = require('tiktok-live-connector');
 
 const PORT = process.env.PORT || 3005;
-let currentUsername = process.env.TIKTOK_USERNAME || 'foxy.2491';
+const LAST_ROOM_FILE = path.join(__dirname, 'last_room.json');
+
+let defaultUser = process.env.TIKTOK_USERNAME || 'mosatang';
+if (fs.existsSync(LAST_ROOM_FILE)) {
+    try {
+        const saved = JSON.parse(fs.readFileSync(LAST_ROOM_FILE, 'utf8'));
+        if (saved && saved.username) {
+            defaultUser = saved.username;
+            console.log(`[Bridge] Restored last active room from disk: @${defaultUser}`);
+        }
+    } catch (e) {}
+}
+
+let currentUsername = defaultUser;
 let currentConn = null;
 const clients = new Set();
 const recentMessages = [];
@@ -40,6 +56,9 @@ function connectRoom(username) {
     }
 
     currentUsername = username;
+    try {
+        fs.writeFileSync(LAST_ROOM_FILE, JSON.stringify({ username, savedAt: new Date().toISOString() }));
+    } catch (e) {}
     currentLiveInfo = {
         isLive: false,
         username,
@@ -164,6 +183,19 @@ setInterval(() => {
 setInterval(() => {
     broadcast('ping', { time: Date.now() });
 }, 25000);
+
+// Render Anti-Sleep Self-Ping (Runs every 8 minutes to prevent Render Free Tier spin-down)
+const PING_URL = process.env.RENDER_EXTERNAL_URL || 'https://foxy-live-bridge.onrender.com';
+setInterval(() => {
+    try {
+        const client = PING_URL.startsWith('https') ? https : http;
+        client.get(`${PING_URL}/health`, (res) => {
+            console.log(`[KeepAlive] Self-ping status: ${res.statusCode}`);
+        }).on('error', (err) => {
+            console.log(`[KeepAlive] Self-ping notice: ${err.message}`);
+        });
+    } catch (e) {}
+}, 8 * 60 * 1000);
 
 // HTTP Server
 const server = http.createServer((req, res) => {
